@@ -4,6 +4,8 @@ import base64
 from pathlib import Path
 from io import BytesIO
 from datetime import datetime
+from nlp_engine import extract_skills_nlp
+from ats_checker import run_ats_check
 
 try:
     import docx
@@ -40,6 +42,10 @@ def get_logo_base64():
 
 logo_b64 = get_logo_base64()
 
+EMERALD_HEX = "#35D39A"
+GOLD_HEX = "#E9B85B"
+PINK_HEX = "#F276B8"
+
 # ============================================================
 # SESSION STATE
 # ============================================================
@@ -47,12 +53,14 @@ if "page" not in st.session_state:
     st.session_state.page = "dashboard"
 if "history" not in st.session_state:
     st.session_state.history = []
+if "username" not in st.session_state:
+    st.session_state.username = ""
 
 def go_to(page_name):
     st.session_state.page = page_name
 
 # ============================================================
-# SHARED HEADER
+# SHARED HEADER (used on dashboard + work screen)
 # ============================================================
 def render_header():
     st.markdown(
@@ -73,17 +81,9 @@ def render_header():
     )
 
 # ============================================================
-# BACKEND LOGIC (real skill-matching engine)
+# BACKEND LOGIC — now powered by NLP-based skill extraction
+# (see nlp_engine.py + skills_taxonomy.py)
 # ============================================================
-SKILLS_DB = [
-    "python", "java", "c++", "sql", "html", "css", "javascript",
-    "machine learning", "deep learning", "data science", "nlp",
-    "react", "node.js", "flask", "django", "aws", "cloud",
-    "git", "github", "docker", "kubernetes", "excel", "power bi",
-    "tableau", "communication", "teamwork", "leadership",
-    "problem solving", "project management", "data analysis",
-    "tensorflow", "pytorch", "pandas", "numpy", "api", "rest api"
-]
 
 def extract_text_from_pdf(uploaded_file):
     text = ""
@@ -92,16 +92,17 @@ def extract_text_from_pdf(uploaded_file):
             page_text = page.extract_text()
             if page_text:
                 text += page_text + " "
-    return text.lower()
+    return text
 
 def extract_text_from_docx(uploaded_file):
     doc = docx.Document(uploaded_file)
-    return " ".join(p.text for p in doc.paragraphs).lower()
+    return " ".join(p.text for p in doc.paragraphs)
 
-def extract_skills(text, skills_db):
-    return set(skill for skill in skills_db if skill in text)
+def extract_skills(text, skills_db=None):
+    # skills_db kept as param for compatibility; now uses NLP taxonomy matching
+    return extract_skills_nlp(text)
 
-def build_report_text(score, matched, missing, jd_skills):
+def build_report_text(score, matched, missing, jd_skills, ats_result=None):
     lines = [
         "RESUFIT — AI Match Report",
         f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
@@ -119,10 +120,85 @@ def build_report_text(score, matched, missing, jd_skills):
         "Suggestion:",
         f"Consider adding these skills to strengthen your profile: {', '.join(missing) if missing else 'N/A'}",
     ]
+    if ats_result:
+        lines += [
+            "",
+            "-" * 40,
+            "ATS Compatibility Check",
+            f"Score: {ats_result['score']}/100 — {ats_result['verdict']}",
+            "",
+        ]
+        for c in ats_result["checks"]:
+            status = "PASS" if c["passed"] else "FAIL"
+            lines.append(f"[{status}] {c['label']} — {c['detail']}")
     return "\n".join(lines)
 
 # ============================================================
-# PAGE — DASHBOARD
+# PAGE 1 — SPLASH
+# ============================================================
+def render_splash():
+    st.markdown("<div style='height:80px'></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div style="text-align:center;">
+            <div style="
+                width:96px;height:96px;margin:0 auto 24px;
+                display:flex;align-items:center;justify-content:center;
+                border-radius:24px;
+                background: linear-gradient(135deg,#8B5CFF,#6F70FF,#4C8DFF);
+                box-shadow: 0 0 40px rgba(139,92,255,0.25);
+                overflow:hidden;
+            ">
+                <img src="data:image/png;base64,{logo_b64}" style="width:60px;height:60px;">
+            </div>
+            <div class="rf-hero-badge">✦ AI RESUME INTELLIGENCE</div>
+            <h1 class="rf-hero-title">Where talent meets <span>intelligence.</span></h1>
+            <p class="rf-hero-description">
+                Upload a resume and a job description — RESUFIT analyzes the fit,
+                highlights matched skills, and shows exactly what's missing.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    st.markdown("<div style='height:30px'></div>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        if st.button("Get Started →", use_container_width=True):
+            go_to("login")
+            st.rerun()
+
+# ============================================================
+# PAGE 2 — LOGIN
+# ============================================================
+def render_login():
+    st.markdown("<div style='height:60px'></div>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 1.2, 1])
+    with col2:
+        st.markdown(
+            f"""
+            <div style="text-align:center;margin-bottom:20px;">
+                <div class="rf-logo" style="margin:0 auto 14px;">
+                    <img src="data:image/png;base64,{logo_b64}" style="width:27px;height:27px;">
+                </div>
+                <div style="font-size:22px;font-weight:800;color:#F5F5F7;">Welcome to RESUFIT</div>
+                <div style="font-size:12px;color:#6F7482;margin-top:4px;">Sign in to continue</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        st.markdown('<div class="rf-card">', unsafe_allow_html=True)
+        username = st.text_input("Name", placeholder="Enter your name")
+        st.text_input("Password", type="password", placeholder="••••••••")
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+        if st.button("Login →", use_container_width=True):
+            st.session_state.username = username if username else "Guest"
+            go_to("dashboard")
+            st.rerun()
+
+# ============================================================
+# PAGE 3 — DASHBOARD
 # ============================================================
 def render_dashboard():
     render_header()
@@ -178,7 +254,7 @@ def render_dashboard():
             )
 
 # ============================================================
-# PAGE — WORK SCREEN
+# PAGE 4 — WORK SCREEN (the screening tool)
 # ============================================================
 def render_work():
     render_header()
@@ -228,6 +304,9 @@ def render_work():
 
     if analyze:
         if resume_file and job_desc:
+            resume_bytes = resume_file.read()
+            resume_file.seek(0)
+
             if resume_file.name.lower().endswith(".pdf"):
                 resume_text = extract_text_from_pdf(resume_file)
             elif resume_file.name.lower().endswith(".docx") and DOCX_AVAILABLE:
@@ -236,9 +315,9 @@ def render_work():
                 st.error("Unsupported file type.")
                 resume_text = ""
 
-            jd_text = job_desc.lower()
-            resume_skills = extract_skills(resume_text, SKILLS_DB)
-            jd_skills = extract_skills(jd_text, SKILLS_DB)
+            jd_text = job_desc
+            resume_skills = extract_skills(resume_text)
+            jd_skills = extract_skills(jd_text)
 
             if jd_skills:
                 matched = resume_skills.intersection(jd_skills)
@@ -330,7 +409,52 @@ def render_work():
                         unsafe_allow_html=True
                     )
 
-                report = build_report_text(score, matched, missing, jd_skills)
+                # ============================================================
+                # ATS COMPATIBILITY CHECK (Phase 2 — differentiator feature)
+                # ============================================================
+                ats_result = run_ats_check(resume_text)
+                ats_score = ats_result["score"]
+                ats_color = EMERALD_HEX if ats_score >= 80 else GOLD_HEX if ats_score >= 60 else PINK_HEX
+                ats_tag_class = "rf-tag-success" if ats_score >= 80 else "rf-tag-gold" if ats_score >= 60 else "rf-tag"
+
+                st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+                st.markdown(
+                    f"""
+                    <div class="rf-ai-panel">
+                        <div class="rf-ai-label">✦ ATS COMPATIBILITY CHECK</div>
+                        <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin-top:8px;">
+                            <div style="font-size:40px;font-weight:800;color:{ats_color};letter-spacing:-1px;">{ats_score}<span style="font-size:16px;color:#6F7482;">/100</span></div>
+                            <div>
+                                <div style="color:#F5F5F7;font-size:16px;font-weight:700;">{ats_result['verdict']}</div>
+                                <div style="color:#A7ABB8;font-size:12px;margin-top:3px;">Checks whether your resume can be correctly read by Applicant Tracking Systems — before a human ever sees it.</div>
+                            </div>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+                ats_cols = st.columns(2)
+                for idx, check in enumerate(ats_result["checks"]):
+                    col = ats_cols[idx % 2]
+                    icon = "✓" if check["passed"] else "✕"
+                    color = EMERALD_HEX if check["passed"] else PINK_HEX
+                    with col:
+                        st.markdown(
+                            f"""
+                            <div style="display:flex;gap:10px;padding:10px 4px;border-bottom:1px solid rgba(255,255,255,0.06);">
+                                <div style="color:{color};font-weight:800;font-size:14px;">{icon}</div>
+                                <div>
+                                    <div style="color:#F5F5F7;font-size:12.5px;font-weight:600;">{check['label']}</div>
+                                    <div style="color:#6F7482;font-size:11px;margin-top:2px;">{check['detail']}</div>
+                                </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+
+                report = build_report_text(score, matched, missing, jd_skills, ats_result)
                 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
                 st.download_button(
                     "⬇ Download Report",
