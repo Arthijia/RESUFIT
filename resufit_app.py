@@ -6,6 +6,7 @@ from io import BytesIO
 from datetime import datetime
 from nlp_engine import extract_skills_nlp
 from ats_checker import run_ats_check
+from database import init_db, save_screening, get_recent_screenings, get_stats, clear_history
 
 try:
     import docx
@@ -49,10 +50,10 @@ PINK_HEX = "#F276B8"
 # ============================================================
 # SESSION STATE
 # ============================================================
+init_db()
+
 if "page" not in st.session_state:
     st.session_state.page = "dashboard"
-if "history" not in st.session_state:
-    st.session_state.history = []
 if "username" not in st.session_state:
     st.session_state.username = ""
 
@@ -217,15 +218,19 @@ def render_dashboard():
         unsafe_allow_html=True
     )
 
-    total = len(st.session_state.history)
-    avg_score = round(sum(h["score"] for h in st.session_state.history) / total) if total else 0
+    stats = get_stats()
+    total = stats["total"]
+    avg_score = stats["avg_match"]
+    avg_ats = stats["avg_ats"]
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown(f'<div class="rf-stat"><div class="rf-stat-label">Total Screenings</div><div class="rf-stat-value">{total}</div></div>', unsafe_allow_html=True)
     with c2:
         st.markdown(f'<div class="rf-stat"><div class="rf-stat-label">Average Match</div><div class="rf-stat-value">{avg_score}%</div></div>', unsafe_allow_html=True)
     with c3:
+        st.markdown(f'<div class="rf-stat"><div class="rf-stat-label">Average ATS Score</div><div class="rf-stat-value">{avg_ats}</div></div>', unsafe_allow_html=True)
+    with c4:
         st.markdown(f'<div class="rf-stat"><div class="rf-stat-label">Formats Supported</div><div class="rf-stat-value">PDF / DOCX</div></div>', unsafe_allow_html=True)
 
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
@@ -235,18 +240,28 @@ def render_dashboard():
         st.rerun()
 
     st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
-    st.markdown('<div class="rf-card-title">Recent Activity</div>', unsafe_allow_html=True)
+    col_title, col_clear = st.columns([4, 1])
+    with col_title:
+        st.markdown('<div class="rf-card-title">Recent Activity</div>', unsafe_allow_html=True)
+    with col_clear:
+        if total > 0 and st.button("Clear History", use_container_width=True):
+            clear_history()
+            st.rerun()
 
-    if not st.session_state.history:
+    recent = get_recent_screenings(limit=5)
+    if not recent:
         st.markdown('<div class="rf-card-description">No screenings yet — run your first analysis to see it here.</div>', unsafe_allow_html=True)
     else:
-        for h in reversed(st.session_state.history[-5:]):
+        for h in recent:
             st.markdown(
                 f"""
                 <div class="rf-card" style="margin-bottom:10px;padding:16px;">
-                    <div style="display:flex;justify-content:space-between;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
                         <span style="font-size:13px;color:#F5F5F7;font-weight:650;">{h['time']}</span>
-                        <span class="rf-tag {'rf-tag-success' if h['score']>=70 else 'rf-tag-gold' if h['score']>=40 else 'rf-tag'}">{h['score']}% match</span>
+                        <div>
+                            <span class="rf-tag {'rf-tag-success' if h['match_score']>=70 else 'rf-tag-gold' if h['match_score']>=40 else 'rf-tag'}">{h['match_score']}% match</span>
+                            <span class="rf-tag {'rf-tag-success' if h['ats_score']>=80 else 'rf-tag-gold' if h['ats_score']>=60 else 'rf-tag'}">ATS {h['ats_score']}</span>
+                        </div>
                     </div>
                 </div>
                 """,
@@ -324,11 +339,6 @@ def render_work():
                 missing = jd_skills - resume_skills
                 score = round((len(matched) / len(jd_skills)) * 100)
                 degrees = score * 3.6
-
-                st.session_state.history.append({
-                    "time": datetime.now().strftime("%d %b, %H:%M"),
-                    "score": score
-                })
 
                 st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
                 label = "Strong candidate match" if score >= 70 else \
@@ -416,6 +426,8 @@ def render_work():
                 ats_score = ats_result["score"]
                 ats_color = EMERALD_HEX if ats_score >= 80 else GOLD_HEX if ats_score >= 60 else PINK_HEX
                 ats_tag_class = "rf-tag-success" if ats_score >= 80 else "rf-tag-gold" if ats_score >= 60 else "rf-tag"
+
+                save_screening(score, ats_score, matched, missing)
 
                 st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
                 st.markdown(
