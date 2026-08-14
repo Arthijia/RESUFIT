@@ -235,9 +235,15 @@ def render_dashboard():
 
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
-    if st.button("+ Start New Screening", use_container_width=True):
-        go_to("work")
-        st.rerun()
+    bcol1, bcol2 = st.columns(2)
+    with bcol1:
+        if st.button("+ Start New Screening", use_container_width=True):
+            go_to("work")
+            st.rerun()
+    with bcol2:
+        if st.button("⇄ Compare Multiple Jobs", use_container_width=True):
+            go_to("compare")
+            st.rerun()
 
     st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
     col_title, col_clear = st.columns([4, 1])
@@ -491,12 +497,156 @@ def render_work():
     )
 
 # ============================================================
+# PAGE — COMPARE MODE
+# One resume against multiple job descriptions, side by side
+# ============================================================
+def render_compare():
+    render_header()
+
+    if st.button("← Back to Dashboard"):
+        go_to("dashboard")
+        st.rerun()
+
+    st.markdown(
+        """
+        <div class="rf-ai-panel" style="margin-top:16px;">
+            <div class="rf-ai-label">✦ COMPARISON MODE</div>
+            <div class="rf-ai-title">Compare one resume against multiple jobs</div>
+            <p style="color:#A7ABB8;font-size:13px;line-height:1.6;margin-top:7px;">
+                Upload a resume once, add up to 3 job descriptions, and see which role fits best.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+
+    accepted_types = ["pdf", "docx"] if DOCX_AVAILABLE else ["pdf"]
+    st.markdown(
+        f"""
+        <div class="rf-upload">
+            <div class="rf-upload-icon">↑</div>
+            <div class="rf-upload-title">Drop your resume here</div>
+            <div class="rf-upload-description">{'PDF or DOCX' if DOCX_AVAILABLE else 'PDF'} • Used across all job comparisons</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    resume_file = st.file_uploader("Upload Resume", type=accepted_types, label_visibility="collapsed", key="compare_resume")
+
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="rf-card-title">Job Descriptions</div>', unsafe_allow_html=True)
+
+    job_labels = ["Job A", "Job B", "Job C"]
+    jd_inputs = []
+    cols = st.columns(3)
+    for i, col in enumerate(cols):
+        with col:
+            st.markdown(f'<div style="font-size:12px;color:#A7ABB8;font-weight:650;margin-bottom:6px;">{job_labels[i]}</div>', unsafe_allow_html=True)
+            jd = st.text_area(job_labels[i], height=160, label_visibility="collapsed",
+                               placeholder=f"Paste {job_labels[i]} description here...", key=f"jd_{i}")
+            jd_inputs.append(jd)
+
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    compare = st.button("✦ Compare Jobs", use_container_width=True)
+
+    if compare:
+        active_jobs = [(job_labels[i], jd) for i, jd in enumerate(jd_inputs) if jd.strip()]
+
+        if not resume_file:
+            st.error("Please upload a resume.")
+        elif len(active_jobs) < 2:
+            st.error("Please fill in at least 2 job descriptions to compare.")
+        else:
+            if resume_file.name.lower().endswith(".pdf"):
+                resume_text = extract_text_from_pdf(resume_file)
+            elif resume_file.name.lower().endswith(".docx") and DOCX_AVAILABLE:
+                resume_text = extract_text_from_docx(resume_file)
+            else:
+                st.error("Unsupported file type.")
+                resume_text = ""
+
+            resume_skills = extract_skills(resume_text)
+
+            results = []
+            for label, jd_text in active_jobs:
+                jd_skills = extract_skills(jd_text)
+                if jd_skills:
+                    matched = resume_skills.intersection(jd_skills)
+                    missing = jd_skills - resume_skills
+                    score = round((len(matched) / len(jd_skills)) * 100)
+                else:
+                    matched, missing, score = set(), set(), 0
+                results.append({
+                    "label": label, "score": score,
+                    "matched": matched, "missing": missing,
+                    "jd_skill_count": len(jd_skills)
+                })
+
+            results.sort(key=lambda r: r["score"], reverse=True)
+            best = results[0]
+
+            st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+            st.markdown(
+                f"""
+                <div class="rf-score-panel">
+                    <div class="rf-ai-label">✦ BEST FIT</div>
+                    <div style="font-size:24px;font-weight:800;color:#F5F5F7;margin-top:6px;">
+                        {best['label']} — {best['score']}% match
+                    </div>
+                    <div style="color:#A7ABB8;font-size:13px;margin-top:6px;">
+                        This resume aligns most closely with {best['label']} out of the jobs compared.
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+            st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+            result_cols = st.columns(len(results))
+            for idx, r in enumerate(results):
+                tag_class = "rf-tag-success" if r["score"] >= 70 else "rf-tag-gold" if r["score"] >= 40 else "rf-tag"
+                is_best = idx == 0
+                with result_cols[idx]:
+                    st.markdown(
+                        f"""
+                        <div class="rf-card" style="{'border-color:#8B5CFF;' if is_best else ''}">
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <div class="rf-card-title" style="margin-bottom:0;">{r['label']}{' 🏆' if is_best else ''}</div>
+                            </div>
+                            <div style="font-size:32px;font-weight:800;color:#F5F5F7;margin:10px 0;">{r['score']}%</div>
+                            <span class="rf-tag {tag_class}">{len(r['matched'])} matched</span>
+                            <div style="color:#A7ABB8;font-size:11px;line-height:1.6;margin-top:10px;">
+                                <strong style="color:#35D39A;">Matched:</strong> {", ".join(sorted(r['matched'])) if r['matched'] else 'None'}
+                            </div>
+                            <div style="color:#A7ABB8;font-size:11px;line-height:1.6;margin-top:6px;">
+                                <strong style="color:#F276B8;">Missing:</strong> {", ".join(sorted(r['missing'])) if r['missing'] else 'None'}
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+
+    st.markdown(
+        """
+        <div class="rf-footer">
+            <strong>RESUFIT</strong> &nbsp;•&nbsp; Where talent meets intelligence.
+            <br><span style="display:inline-block;margin-top:6px;">Find the fit, not just the resume.</span>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+# ============================================================
 # ROUTER
 # ============================================================
 if st.session_state.page == "dashboard":
     render_dashboard()
 elif st.session_state.page == "work":
     render_work()
+elif st.session_state.page == "compare":
+    render_compare()
 else:
     st.session_state.page = "dashboard"
     render_dashboard()
