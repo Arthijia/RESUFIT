@@ -5,6 +5,7 @@ from pathlib import Path
 from io import BytesIO
 from datetime import datetime
 from nlp_engine import extract_skills_nlp
+from skill_weighting import extract_weighted_skills
 from ats_checker import run_ats_check
 from database import init_db, save_screening, get_recent_screenings, get_stats, clear_history
 
@@ -339,11 +340,22 @@ def render_work():
             jd_text = job_desc
             resume_skills = extract_skills(resume_text)
             jd_skills = extract_skills(jd_text)
+            jd_weighted = extract_weighted_skills(jd_text)
 
             if jd_skills:
                 matched = resume_skills.intersection(jd_skills)
                 missing = jd_skills - resume_skills
-                score = round((len(matched) / len(jd_skills)) * 100)
+
+                # Weighted score: required skills count 2x, preferred count 1x
+                total_weight = sum(jd_weighted.get(s, {"weight": 1})["weight"] for s in jd_skills)
+                matched_weight = sum(jd_weighted.get(s, {"weight": 1})["weight"] for s in matched)
+                score = round((matched_weight / total_weight) * 100) if total_weight else 0
+
+                required_skills = {s for s, info in jd_weighted.items() if info["category"] != "preferred"}
+                preferred_skills = {s for s, info in jd_weighted.items() if info["category"] == "preferred"}
+                required_matched = len(required_skills & matched)
+                preferred_matched = len(preferred_skills & matched)
+
                 degrees = score * 3.6
 
                 st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
@@ -374,11 +386,12 @@ def render_work():
                             <div>
                                 <div style="color:#F5F5F7;font-size:24px;font-weight:750;letter-spacing:-0.7px;">{label}</div>
                                 <div style="color:#A7ABB8;font-size:13px;line-height:1.65;margin-top:8px;max-width:550px;">
-                                    Based on {len(matched)} of {len(jd_skills)} required skills found in this resume.
+                                    Weighted match — required skills count more than preferred ones.
                                 </div>
                                 <div style="margin-top:15px;">
                                     <span class="rf-tag {tag_class}">{label.split()[0]} Match</span>
-                                    <span class="rf-tag">AI Verified</span>
+                                    <span class="rf-tag rf-tag-success">Required: {required_matched}/{len(required_skills)}</span>
+                                    <span class="rf-tag rf-tag-gold">Preferred: {preferred_matched}/{len(preferred_skills)}</span>
                                 </div>
                             </div>
                         </div>
@@ -401,24 +414,34 @@ def render_work():
                         unsafe_allow_html=True
                     )
                 with c2:
+                    missing_required = sorted(missing & required_skills)
+                    missing_preferred = sorted(missing & preferred_skills)
+                    missing_display = ""
+                    if missing_required:
+                        missing_display += f'<span style="color:#F276B8;">Required:</span> {", ".join(missing_required)}<br>'
+                    if missing_preferred:
+                        missing_display += f'<span style="color:#E9B85B;">Preferred:</span> {", ".join(missing_preferred)}'
+                    if not missing_display:
+                        missing_display = "None — great fit!"
                     st.markdown(
                         f"""
                         <div class="rf-insight rf-insight-pink">
                             <div style="color:#F276B8;font-size:11px;font-weight:700;letter-spacing:0.7px;">SKILL GAPS</div>
                             <div style="color:#F5F5F7;font-size:15px;font-weight:650;margin-top:7px;">{len(missing)} skill(s) missing</div>
-                            <div style="color:#A7ABB8;font-size:12px;line-height:1.6;margin-top:5px;">{", ".join(missing) if missing else "None — great fit!"}</div>
+                            <div style="color:#A7ABB8;font-size:12px;line-height:1.6;margin-top:5px;">{missing_display}</div>
                         </div>
                         """,
                         unsafe_allow_html=True
                     )
 
                 if missing:
+                    priority_missing = sorted(missing & required_skills) or sorted(missing)
                     st.markdown(
                         f"""
                         <div class="rf-insight rf-insight-gold" style="margin-top:10px;">
                             <div style="color:#E9B85B;font-size:11px;font-weight:700;letter-spacing:0.7px;">SUGGESTION</div>
                             <div style="color:#A7ABB8;font-size:12px;line-height:1.6;margin-top:5px;">
-                                Add these skills to strengthen your profile: {", ".join(missing)}
+                                Prioritize adding these skills — they're marked as required in the job description: {", ".join(priority_missing)}
                             </div>
                         </div>
                         """,
