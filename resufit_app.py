@@ -236,7 +236,7 @@ def render_dashboard():
 
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
-    bcol1, bcol2 = st.columns(2)
+    bcol1, bcol2, bcol3 = st.columns(3)
     with bcol1:
         if st.button("+ Start New Screening", use_container_width=True):
             go_to("work")
@@ -244,6 +244,10 @@ def render_dashboard():
     with bcol2:
         if st.button("⇄ Compare Multiple Jobs", use_container_width=True):
             go_to("compare")
+            st.rerun()
+    with bcol3:
+        if st.button("☰ Recruiter Mode", use_container_width=True):
+            go_to("recruiter")
             st.rerun()
 
     st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
@@ -662,6 +666,181 @@ def render_compare():
     )
 
 # ============================================================
+# PAGE — RECRUITER MODE
+# One job description against MANY resumes, auto-ranked
+# ============================================================
+def render_recruiter():
+    render_header()
+
+    if st.button("← Back to Dashboard"):
+        go_to("dashboard")
+        st.rerun()
+
+    st.markdown(
+        """
+        <div class="rf-ai-panel" style="margin-top:16px;">
+            <div class="rf-ai-label">✦ RECRUITER MODE</div>
+            <div class="rf-ai-title">Rank multiple candidates against one job</div>
+            <p style="color:#A7ABB8;font-size:13px;line-height:1.6;margin-top:7px;">
+                Built for placement cells and recruiters — paste one job description, upload every resume you've collected, and get an instantly ranked shortlist.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="rf-card-title">Job Description</div>', unsafe_allow_html=True)
+    jd_text = st.text_area("Job Description", height=140, label_visibility="collapsed",
+                            placeholder="Paste the job description here...", key="recruiter_jd")
+
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+    accepted_types = ["pdf", "docx"] if DOCX_AVAILABLE else ["pdf"]
+    st.markdown(
+        f"""
+        <div class="rf-upload">
+            <div class="rf-upload-icon">↑</div>
+            <div class="rf-upload-title">Upload multiple resumes</div>
+            <div class="rf-upload-description">{'PDF or DOCX' if DOCX_AVAILABLE else 'PDF'} • Select as many as you need</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    resume_files = st.file_uploader(
+        "Upload Resumes", type=accepted_types, label_visibility="collapsed",
+        accept_multiple_files=True, key="recruiter_resumes"
+    )
+
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    rank = st.button("✦ Rank Candidates", use_container_width=True)
+
+    if rank:
+        if not jd_text.strip():
+            st.error("Please paste a job description.")
+        elif not resume_files:
+            st.error("Please upload at least one resume.")
+        else:
+            jd_skills = extract_skills(jd_text)
+            jd_weighted = extract_weighted_skills(jd_text)
+            required_skills = {s for s, info in jd_weighted.items() if info["category"] != "preferred"}
+            preferred_skills = {s for s, info in jd_weighted.items() if info["category"] == "preferred"}
+
+            if not jd_skills:
+                st.warning("No recognizable skills found in the job description. Try adding more detail.")
+            else:
+                results = []
+                progress = st.progress(0, text="Analyzing candidates...")
+                for idx, f in enumerate(resume_files):
+                    try:
+                        if f.name.lower().endswith(".pdf"):
+                            text = extract_text_from_pdf(f)
+                        elif f.name.lower().endswith(".docx") and DOCX_AVAILABLE:
+                            text = extract_text_from_docx(f)
+                        else:
+                            continue
+
+                        resume_skills = extract_skills(text)
+                        matched = resume_skills & jd_skills
+                        missing = jd_skills - resume_skills
+
+                        total_weight = sum(jd_weighted.get(s, {"weight": 1})["weight"] for s in jd_skills)
+                        matched_weight = sum(jd_weighted.get(s, {"weight": 1})["weight"] for s in matched)
+                        score = round((matched_weight / total_weight) * 100) if total_weight else 0
+
+                        ats = run_ats_check(text)
+
+                        results.append({
+                            "filename": f.name,
+                            "score": score,
+                            "ats_score": ats["score"],
+                            "matched": matched,
+                            "missing": missing,
+                            "required_matched": len(required_skills & matched),
+                            "required_total": len(required_skills),
+                        })
+                    except Exception:
+                        results.append({
+                            "filename": f.name, "score": 0, "ats_score": 0,
+                            "matched": set(), "missing": jd_skills,
+                            "required_matched": 0, "required_total": len(required_skills),
+                            "error": True
+                        })
+                    progress.progress((idx + 1) / len(resume_files), text=f"Analyzed {idx+1}/{len(resume_files)}")
+
+                progress.empty()
+                results.sort(key=lambda r: r["score"], reverse=True)
+
+                st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+                st.markdown(
+                    f"""
+                    <div class="rf-score-panel">
+                        <div class="rf-ai-label">✦ SHORTLIST READY</div>
+                        <div style="font-size:22px;font-weight:800;color:#F5F5F7;margin-top:6px;">
+                            {len(results)} candidate(s) ranked
+                        </div>
+                        <div style="color:#A7ABB8;font-size:13px;margin-top:6px;">
+                            Top candidate: <strong style="color:#35D39A;">{results[0]['filename']}</strong> at {results[0]['score']}% weighted match
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+                for rank_idx, r in enumerate(results):
+                    tag_class = "rf-tag-success" if r["score"] >= 70 else "rf-tag-gold" if r["score"] >= 40 else "rf-tag"
+                    medal = "🥇" if rank_idx == 0 else "🥈" if rank_idx == 1 else "🥉" if rank_idx == 2 else f"#{rank_idx+1}"
+                    st.markdown(
+                        f"""
+                        <div class="rf-card" style="margin-bottom:10px;{'border-color:#8B5CFF;' if rank_idx==0 else ''}">
+                            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+                                <div style="display:flex;align-items:center;gap:12px;">
+                                    <span style="font-size:20px;">{medal}</span>
+                                    <span style="color:#F5F5F7;font-size:14px;font-weight:650;">{r['filename']}</span>
+                                </div>
+                                <div style="display:flex;align-items:center;gap:10px;">
+                                    <span style="color:#F5F5F7;font-size:20px;font-weight:800;">{r['score']}%</span>
+                                    <span class="rf-tag {tag_class}">Required {r['required_matched']}/{r['required_total']}</span>
+                                    <span class="rf-tag">ATS {r['ats_score']}</span>
+                                </div>
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+
+                # CSV export
+                import csv, io
+                csv_buffer = io.StringIO()
+                writer = csv.writer(csv_buffer)
+                writer.writerow(["Rank", "Filename", "Match Score (%)", "ATS Score", "Required Matched", "Required Total", "Matched Skills", "Missing Skills"])
+                for i, r in enumerate(results):
+                    writer.writerow([
+                        i + 1, r["filename"], r["score"], r["ats_score"],
+                        r["required_matched"], r["required_total"],
+                        ", ".join(sorted(r["matched"])), ", ".join(sorted(r["missing"]))
+                    ])
+
+                st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+                st.download_button(
+                    "⬇ Download Shortlist (CSV)",
+                    data=csv_buffer.getvalue(),
+                    file_name="resufit_shortlist.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
+    st.markdown(
+        """
+        <div class="rf-footer">
+            <strong>RESUFIT</strong> &nbsp;•&nbsp; Where talent meets intelligence.
+            <br><span style="display:inline-block;margin-top:6px;">Find the fit, not just the resume.</span>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+# ============================================================
 # ROUTER
 # ============================================================
 if st.session_state.page == "dashboard":
@@ -670,6 +849,8 @@ elif st.session_state.page == "work":
     render_work()
 elif st.session_state.page == "compare":
     render_compare()
+elif st.session_state.page == "recruiter":
+    render_recruiter()
 else:
     st.session_state.page = "dashboard"
     render_dashboard()
